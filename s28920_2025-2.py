@@ -1,79 +1,86 @@
 #!/usr/bin/env python3
-"""
-NCBI GenBank Extended Retriever
-"""
 
 from Bio import Entrez, SeqIO
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def fetch_records(email, api_key, taxid, min_len, max_len, max_records=200):
-    Entrez.email = email
-    Entrez.api_key = api_key
 
-    search_term = f"txid{taxid}[Organism]"
-    handle = Entrez.esearch(db="nucleotide", term=search_term, usehistory="y", retmax=max_records)
-    search = Entrez.read(handle)
-    ids = search["IdList"]
-    webenv = search["WebEnv"]
-    query_key = search["QueryKey"]
+def get_user_input():
+    email = input("Email: ")
+    api_key = input("API Key: ")
+    tax_id = input("TaxID: ")
 
+    try:
+        min_len = int(input("Min Length: "))
+        max_len = int(input("Max Length: "))
+    except ValueError:
+        exit("Invalid input.")
+
+    return email, api_key, tax_id, min_len, max_len
+
+
+def search_sequences(tax_id, min_len, max_len):
+    query = f"txid{tax_id}[Organism] AND {min_len}:{max_len}[SLEN]"
+    handle = Entrez.esearch(db="nucleotide", term=query, usehistory="y", retmax=0)
+    results = Entrez.read(handle)
+    handle.close()
+
+    if int(results["Count"]) == 0:
+        exit("No records found.")
+
+    return results["WebEnv"], results["QueryKey"]
+
+
+def fetch_sequences(webenv, query_key, min_len, max_len):
     handle = Entrez.efetch(
         db="nucleotide", rettype="gb", retmode="text",
-        webenv=webenv, query_key=query_key, retmax=max_records
+        retmax=100, webenv=webenv, query_key=query_key
     )
 
-    records = SeqIO.parse(handle, "genbank")
-    filtered = []
-
-    for record in records:
-        length = len(record.seq)
-        if min_len <= length <= max_len:
-            filtered.append({
+    records = []
+    for record in SeqIO.parse(handle, "genbank"):
+        seq_len = len(record.seq)
+        if min_len <= seq_len <= max_len:
+            records.append({
                 "Accession": record.id,
-                "Length": length,
+                "Length": seq_len,
                 "Description": record.description
             })
 
-    return filtered
+    handle.close()
+    return records
 
-def save_csv(data, filename="report.csv"):
-    df = pd.DataFrame(data)
-    df.to_csv(filename, index=False)
-    print(f"[+] CSV report saved as {filename}")
 
-def plot_lengths(data, filename="length_chart.png"):
-    sorted_data = sorted(data, key=lambda x: x["Length"], reverse=True)
-    accs = [x["Accession"] for x in sorted_data]
-    lens = [x["Length"] for x in sorted_data]
+def save_results(data, tax_id):
+    df = pd.DataFrame(data).sort_values("Length", ascending=False)
+    csv_name = f"taxid_{tax_id}_report.csv"
+    df.to_csv(csv_name, index=False)
+    print(f"Saved data to {csv_name}")
 
+    # Plotting
     plt.figure(figsize=(10, 5))
-    plt.plot(accs, lens, marker='o')
+    plt.plot(df["Accession"], df["Length"], marker='o')
     plt.xticks(rotation=90, fontsize=6)
-    plt.xlabel("GenBank Accession")
-    plt.ylabel("Sequence Length")
-    plt.title("Sequence Lengths by Accession")
+    plt.xlabel("Accession")
+    plt.ylabel("Length")
+    plt.title(f"Seq Lengths for TaxID {tax_id}")
     plt.tight_layout()
-    plt.savefig(filename)
-    print(f"[+] Length chart saved as {filename}")
+    chart_name = f"taxid_{tax_id}_chart.png"
+    plt.savefig(chart_name)
+    print(f"Saved chart to {chart_name}")
+    return len(df)
+
 
 def main():
-    email = input("Enter your email: ")
-    api_key = input("Enter your NCBI API key: ")
-    taxid = input("Enter taxonomic ID (taxid): ")
-    min_len = int(input("Minimum sequence length: "))
-    max_len = int(input("Maximum sequence length: "))
+    email, api_key, tax_id, min_len, max_len = get_user_input()
+    Entrez.email = email
+    Entrez.api_key = api_key
 
-    print("[*] Fetching records...")
-    records = fetch_records(email, api_key, taxid, min_len, max_len)
+    webenv, query_key = search_sequences(tax_id, min_len, max_len)
+    records = fetch_sequences(webenv, query_key, min_len, max_len)
+    count = save_results(records, tax_id)
+    print(f"Saved {count} records to CSV and PNG.")
 
-    if not records:
-        print("[-] No records found in specified length range.")
-        return
-
-    save_csv(records)
-    plot_lengths(records)
-    print("[✓] All done.")
 
 if __name__ == "__main__":
     main()
